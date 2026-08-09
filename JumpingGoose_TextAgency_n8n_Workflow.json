@@ -1,0 +1,1363 @@
+{
+  "id": "JGTextAgencyAgent",
+  "name": "JUMPINGGOOSE Agency Text Intelligence",
+  "active": true,
+  "updatedAt": "2026-08-09T11:31:00.965Z",
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "nodes": [
+    {
+      "id": "chat-trigger",
+      "name": "n8n Chat Trigger",
+      "type": "@n8n/n8n-nodes-langchain.chatTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        80,
+        160
+      ],
+      "parameters": {
+        "options": {}
+      }
+    },
+    {
+      "id": "webhook-trigger",
+      "name": "Webhook Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [
+        80,
+        420
+      ],
+      "webhookId": "jumpinggoose-text-agency",
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "jumpinggoose-text-agency",
+        "responseMode": "lastNode",
+        "options": {
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Access-Control-Allow-Origin",
+                "value": "*"
+              },
+              {
+                "name": "Access-Control-Allow-Headers",
+                "value": "Content-Type, Authorization"
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": "standardize-input",
+      "name": "Standardize Input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        340,
+        300
+      ],
+      "parameters": {
+        "jsCode": "const raw = $input.first()?.json || {};\nconst body = raw.body || raw;\nconst userInput = body.chatInput || body.message || body.prompt || body.text || body.userInput || raw.chatInput || \"\";\nreturn [{\n  json: {\n    userInput: String(userInput || \"\").trim(),\n    sessionId: body.sessionId || raw.sessionId || \"default_session\",\n    currentMemory: body.memory || raw.memory || {},\n    feedback: body.feedback || raw.feedback || {}\n  }\n}];"
+      }
+    },
+    {
+      "id": "conversation-gate",
+      "name": "Conversation Gate",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        580,
+        300
+      ],
+      "parameters": {
+        "jsCode": "const d = $input.first().json || {};\nconst text = String(d.userInput || \"\").trim();\nconst t = text.toLowerCase();\nconst words = t.split(/\\s+/).filter(Boolean);\nconst memory = d.currentMemory || {};\nconst brandName = memory.brand_name || memory.brandName || memory.name || memory.brand?.name || \"\";\nconst category = memory.category || memory.brand_category || memory.brand?.category || \"\";\nconst audience = memory.audience || memory.target_audience || memory.brand?.audience || \"\";\nconst offer = memory.offer || memory.product || memory.service || memory.brand?.offer || \"\";\nconst hasEnoughBrandContext = Boolean(brandName && (category || audience || offer));\n\nconst hasAny = (terms) => terms.some((term) => t.includes(term));\nconst greetingOnly = /^(hi|hello|hey|yo|gm|good morning|good afternoon|good evening|namaste|sup|heyy+|helloo+)[!.\\s]*$/i.test(text);\nconst lightGeneral = words.length <= 8 && hasAny([\"how are you\", \"what can you do\", \"help\", \"start over\", \"thanks\", \"thank you\"]);\nconst brandSignal = hasAny([\"my brand\", \"brand is\", \"brand name\", \"we are\", \"we sell\", \"we make\", \"we provide\", \"new brand\", \"starting a brand\", \"launching\", \"rebrand\", \"position my brand\"]);\nconst explicitSearch = hasAny([\"search\", \"google\", \"look up\", \"research\", \"web search\", \"find online\", \"latest\", \"current\", \"today\", \"trend\", \"competitor\"]);\nconst researchQuery = explicitSearch\n  ? text.replace(/\\b(search|google|look up|research|web search|find online)\\b/gi, \"\").replace(/\\s+/g, \" \").trim()\n  : \"\";\n\nconst routeChecks = [\n  { action: \"SOCIAL\", terms: [\"instagram\", \"linkedin\", \"social\", \"caption\", \"reel\", \"post\", \"content calendar\", \"content pillar\", \"ugc\"] },\n  { action: \"COPY\", terms: [\"copy\", \"tagline\", \"headline\", \"website\", \"email\", \"ad\", \"script\", \"bio\", \"product description\", \"rewrite\", \"landing page\"] },\n  { action: \"COMMS\", terms: [\"campaign\", \"communication\", \"messaging\", \"launch plan\", \"announcement\", \"pr\", \"stakeholder\", \"message hierarchy\"] },\n  { action: \"STRATEGY\", terms: [\"strategy\", \"positioning\", \"brand pillar\", \"archetype\", \"manifesto\", \"value proposition\", \"brand truth\", \"purpose\"] }\n];\nconst requested = routeChecks.find((check) => hasAny(check.terms))?.action || \"\";\n\nlet gateRoute = \"GENERAL_FAST\";\nlet action_type = \"GENERAL\";\nlet reason = \"general_or_light_conversation\";\nlet needsWebResearch = false;\nconst statusUpdates = [\"Thinking through your request\", \"Finding the right JUMPINGGOOSE agent\"];\n\nif (explicitSearch) {\n  gateRoute = \"SPECIALIST\";\n  action_type = requested || \"GENERAL\";\n  reason = \"explicit_web_search_requested\";\n  needsWebResearch = true;\n  statusUpdates.push(\"Searching the web\", \"Taking notes from useful results\", \"Writing a clean answer\");\n} else if (greetingOnly) {\n  gateRoute = \"GREETING\";\n  action_type = \"GENERAL\";\n  reason = \"simple_greeting\";\n} else if (lightGeneral) {\n  gateRoute = \"GENERAL_FAST\";\n  action_type = \"GENERAL\";\n  reason = \"light_general\";\n} else if (brandSignal && !requested) {\n  gateRoute = \"DISCOVERY\";\n  action_type = \"DISCOVERY\";\n  reason = \"brand_context_first\";\n} else if (requested && !hasEnoughBrandContext) {\n  gateRoute = \"DISCOVERY\";\n  action_type = \"DISCOVERY\";\n  reason = \"specialist_request_needs_brand_discovery\";\n} else if (requested) {\n  gateRoute = \"SPECIALIST\";\n  action_type = requested;\n  reason = \"specialist_request_with_brand_context\";\n} else {\n  gateRoute = \"GENERAL_FAST\";\n  action_type = \"GENERAL\";\n}\n\nreturn [{ json: { ...d, gateRoute, action_type, initial_action_type: action_type, needsWebResearch, research_query: researchQuery || text, statusUpdates, conversationGate: { reason, requested, hasEnoughBrandContext, explicitSearch } } }];"
+      }
+    },
+    {
+      "id": "early-router",
+      "name": "Early Router",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 2,
+      "position": [
+        820,
+        300
+      ],
+      "parameters": {
+        "mode": "rules",
+        "outputsAmount": 4,
+        "dataType": "string",
+        "value1": "={{ $json.gateRoute }}",
+        "rules": {
+          "rules": [
+            {
+              "value2": "GREETING",
+              "output": 0
+            },
+            {
+              "value2": "GENERAL_FAST",
+              "output": 1
+            },
+            {
+              "value2": "DISCOVERY",
+              "output": 2
+            },
+            {
+              "value2": "SPECIALIST",
+              "output": 3
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "premade-greeting",
+      "name": "Premade Greeting",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1060,
+        0
+      ],
+      "parameters": {
+        "jsCode": "const d = $input.first().json || {};\nconst greetings = [\n  \"Hey there, welcome to JUMPINGGOOSE AI. We are here to help you create strategy for your brand, write copy for social media, and brainstorm fun ideas.\",\n  \"Hi, welcome to JUMPINGGOOSE AI. Bring us your brand, campaign, caption, or half-formed thought, and we will help shape it into something useful.\",\n  \"Hey there. JUMPINGGOOSE AI can help with brand strategy, social copy, communication ideas, and sharper ways to say what your brand means.\",\n  \"Welcome to JUMPINGGOOSE AI. Tell us what you are building, and we can help with strategy, copy, social content, or a few fresh ideas to get things moving.\",\n  \"Hello from JUMPINGGOOSE AI. We can help you think through your brand, write better copy, plan social content, or turn a loose idea into a clear direction.\"\n];\nconst message = greetings[Math.floor(Math.random() * greetings.length)];\nreturn [{\n  json: {\n    message,\n    text: message,\n    output: message,\n    response: message,\n    progress: {\n      state: \"completed\",\n      placeholders: [\"Reading your message\", \"Opening a fresh JUMPINGGOOSE thread\"]\n    },\n    statusUpdates: [\"Reading your message\", \"Opening a fresh JUMPINGGOOSE thread\"],\n    sessionId: d.sessionId || \"default_session\",\n    memory: d.currentMemory || {},\n    sessionSummary: \"\"\n  }\n}];"
+      }
+    },
+    {
+      "id": "discovery-reference-builder",
+      "name": "Discovery Reference Builder",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1060,
+        160
+      ],
+      "parameters": {
+        "jsCode": "const d = $input.first().json || {};\nreturn [{\n  json: {\n    ...d,\n    action_type: \"DISCOVERY\",\n    context_injection: d.context_injection || \"\",\n    questionnaireReference: {\"INTRO\":{\"triggers\":[\"new brand\",\"start\",\"hello\",\"hi\",\"begin\",\"brand name\"],\"questions\":{\"I1\":\"What is your brand name?\",\"I2\":\"What type of project are we working on? Brand Strategy, Brand Communication, Social Content, Copywriting, Rebranding, or General Brand Help?\",\"I3\":\"What category does the brand operate in?\"}},\"CORE_IDENTITY\":{\"triggers\":[\"conviction\",\"belief\",\"purpose\",\"why\",\"mission\",\"values\"],\"questions\":{\"C1\":\"What is the one conviction that drives your brand? Not a tagline, the belief behind everything.\",\"C2\":\"When your brand fulfils its promise, what changes in your customer's life?\"}},\"CORE_AUDIENCE\":{\"triggers\":[\"customer\",\"audience\",\"target\",\"buyer\",\"persona\",\"demographic\"],\"questions\":{\"C3\":\"Describe one person who needs this brand the most: age, city, context, and day-in-life.\",\"C4\":\"What does your customer actively avoid? Brands, messages, behaviours, or tones they would reject.\"}},\"CORE_COMPETITION\":{\"triggers\":[\"competitor\",\"competition\",\"differentiation\",\"unique\",\"better\"],\"questions\":{\"C5\":\"Who are your top 3 competitors, and where are they strong or weak?\",\"C6\":\"What is the one specific thing you do better or differently?\"}},\"CORE_PERSONALITY\":{\"triggers\":[\"personality\",\"tone\",\"voice\",\"character\",\"vibe\",\"feel\",\"words\"],\"questions\":{\"C7\":\"Pick 5 words that must describe your brand, and 5 words that must never describe it.\",\"C8\":\"Give me one sentence your brand would say, and one it would never say.\",\"C9\":\"If the brand were a person in a room, how would it behave?\"}},\"CORE_POSITIONING\":{\"triggers\":[\"reference\",\"aspiration\",\"price\",\"positioning\",\"channel\",\"timeline\",\"goals\"],\"questions\":{\"C10\":\"Who is an aspirational reference brand and what do you admire about them?\",\"C11\":\"What is the price positioning: budget, value, mid-premium, premium, or luxury?\",\"C12\":\"What are the top 3 business goals for the next 12 months?\"}},\"COMMS_ADDON\":{\"triggers\":[\"campaign\",\"message\",\"channel\",\"content\",\"format\",\"asset\",\"launch\"],\"questions\":{\"M1\":\"What is the communication objective: awareness, consideration, conversion, loyalty, or trust?\",\"M2\":\"What single message should feel true across everything?\",\"M3\":\"Which channels matter most?\"}},\"SOCIAL_ADDON\":{\"triggers\":[\"social\",\"instagram\",\"linkedin\",\"post\",\"reel\",\"caption\",\"calendar\",\"ugc\"],\"questions\":{\"S1\":\"Which social platform matters most right now?\",\"S2\":\"What should the audience do after seeing the content?\",\"S3\":\"What content formats are realistic for the team to produce consistently?\"}},\"REBRANDING_ADDON\":{\"triggers\":[\"rebrand\",\"refresh\",\"evolve\",\"change\",\"broken\"],\"questions\":{\"R1\":\"Why is the brand changing now?\",\"R2\":\"What must stay sacred through the change?\",\"R3\":\"What audience perception needs to shift?\"}}},\n    research_context: { query: \"\", abstract: \"\", source: \"\", url: \"\", related: [] },\n    statusUpdates: d.statusUpdates || [\"Thinking through your request\", \"Preparing brand discovery questions\"],\n    selectedReferenceKinds: [\"questionnaireReference\"]\n  }\n}];"
+      }
+    },
+    {
+      "id": "wait-memory-read",
+      "name": "Wait: Memory Agent",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1,
+      "position": [
+        1060,
+        420
+      ],
+      "parameters": {
+        "resume": "timeInterval",
+        "amount": 8,
+        "unit": "seconds"
+      }
+    },
+    {
+      "id": "memory-agent",
+      "name": "Memory Agent",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        1300,
+        420
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://openrouter.ai/api/v1/chat/completions",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "openRouterApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "HTTP-Referer",
+              "value": "https://jumpinggoose.ai"
+            },
+            {
+              "name": "X-Title",
+              "value": "JUMPINGGOOSE Text Agency"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({\n        models: [\"openai/gpt-oss-20b:free\",\"inclusionai/ling-3.0-tiny:free\",\"google/gemma-4-26b-a4b-it:free\"],\n        messages: [\n          { role: \"system\", content: \"You are the Memory Agent for JUMPINGGOOSE Agency.\\nAnalyze user input, current memory, and feedback.\\nReturn only JSON: {updated_memory, context_injection, specificity_flags, follow_up_probes, action_type, needs_web_research, research_query, meta}.\\naction_type must be DISCOVERY, STRATEGY, COMMS, SOCIAL, COPY, GENERAL, or FEEDBACK.\\nRespect any initial_action_type passed in by the workflow unless the user clearly asks for something else.\\nSet needs_web_research true only for current facts, competitor/category context, trends, SEO, platform norms, claims, or examples that need external context.\" },\n          { role: \"user\", content: `USER INPUT:\\n${$json.userInput}\\n\\nINITIAL ACTION TYPE:\\n${$json.initial_action_type || \"\"}\\n\\nCURRENT MEMORY:\\n${JSON.stringify($json.currentMemory || {})}\\n\\nFEEDBACK:\\n${JSON.stringify($json.feedback || {})}` }\n        ],\n        temperature: 0.15,\n        max_tokens: 4096\n      }) }}",
+        "options": {
+          "timeout": 120000
+        }
+      },
+      "credentials": {
+        "openRouterApi": {
+          "id": "7WTmdhjFDdhIURLL",
+          "name": "OpenRouter account"
+        }
+      }
+    },
+    {
+      "id": "parse-memory-route",
+      "name": "Parse Memory & Route",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1540,
+        420
+      ],
+      "parameters": {
+        "jsCode": "const raw = $input.first()?.json || {};\nconst content = raw.choices?.[0]?.message?.content || \"{}\";\nlet parsed;\ntry {\n  parsed = JSON.parse(content.replace(/^```json\\s*/i, \"\").replace(/```$/i, \"\").trim());\n} catch (error) {\n  parsed = {};\n}\nconst initialAction = String($node[\"Conversation Gate\"].json.initial_action_type || \"\").toUpperCase();\nconst action = String(parsed.action_type || initialAction || \"GENERAL\").toUpperCase();\nconst allowed = [\"DISCOVERY\", \"STRATEGY\", \"COMMS\", \"SOCIAL\", \"COPY\", \"GENERAL\", \"FEEDBACK\"];\nconst gate = $node[\"Conversation Gate\"].json || {};\nconst needsWebResearch = Boolean(gate.needsWebResearch || (parsed.needs_web_research && parsed.research_query));\nconst researchQuery = parsed.research_query || gate.research_query || $node[\"Standardize Input\"].json.userInput;\nreturn [{\n  json: {\n    ...parsed,\n    action_type: allowed.includes(action) ? action : \"GENERAL\",\n    needsWebResearch,\n    research_query: researchQuery,\n    statusUpdates: gate.statusUpdates || [\"Thinking through your request\", \"Finding the right JUMPINGGOOSE agent\"],\n    userInput: $node[\"Standardize Input\"].json.userInput,\n    sessionId: $node[\"Standardize Input\"].json.sessionId,\n    currentMemory: $node[\"Standardize Input\"].json.currentMemory,\n    feedback: $node[\"Standardize Input\"].json.feedback\n  }\n}];"
+      }
+    },
+    {
+      "id": "reference-context-builder",
+      "name": "Reference Context Builder",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1780,
+        420
+      ],
+      "parameters": {
+        "jsCode": "const d = $input.first().json || {};\nconst action = String(d.action_type || \"GENERAL\").toUpperCase();\n\nconst references = {\n  questionnaireReference: {\"INTRO\":{\"triggers\":[\"new brand\",\"start\",\"hello\",\"hi\",\"begin\",\"brand name\"],\"questions\":{\"I1\":\"What is your brand name?\",\"I2\":\"What type of project are we working on? Brand Strategy, Brand Communication, Social Content, Copywriting, Rebranding, or General Brand Help?\",\"I3\":\"What category does the brand operate in?\"}},\"CORE_IDENTITY\":{\"triggers\":[\"conviction\",\"belief\",\"purpose\",\"why\",\"mission\",\"values\"],\"questions\":{\"C1\":\"What is the one conviction that drives your brand? Not a tagline, the belief behind everything.\",\"C2\":\"When your brand fulfils its promise, what changes in your customer's life?\"}},\"CORE_AUDIENCE\":{\"triggers\":[\"customer\",\"audience\",\"target\",\"buyer\",\"persona\",\"demographic\"],\"questions\":{\"C3\":\"Describe one person who needs this brand the most: age, city, context, and day-in-life.\",\"C4\":\"What does your customer actively avoid? Brands, messages, behaviours, or tones they would reject.\"}},\"CORE_COMPETITION\":{\"triggers\":[\"competitor\",\"competition\",\"differentiation\",\"unique\",\"better\"],\"questions\":{\"C5\":\"Who are your top 3 competitors, and where are they strong or weak?\",\"C6\":\"What is the one specific thing you do better or differently?\"}},\"CORE_PERSONALITY\":{\"triggers\":[\"personality\",\"tone\",\"voice\",\"character\",\"vibe\",\"feel\",\"words\"],\"questions\":{\"C7\":\"Pick 5 words that must describe your brand, and 5 words that must never describe it.\",\"C8\":\"Give me one sentence your brand would say, and one it would never say.\",\"C9\":\"If the brand were a person in a room, how would it behave?\"}},\"CORE_POSITIONING\":{\"triggers\":[\"reference\",\"aspiration\",\"price\",\"positioning\",\"channel\",\"timeline\",\"goals\"],\"questions\":{\"C10\":\"Who is an aspirational reference brand and what do you admire about them?\",\"C11\":\"What is the price positioning: budget, value, mid-premium, premium, or luxury?\",\"C12\":\"What are the top 3 business goals for the next 12 months?\"}},\"COMMS_ADDON\":{\"triggers\":[\"campaign\",\"message\",\"channel\",\"content\",\"format\",\"asset\",\"launch\"],\"questions\":{\"M1\":\"What is the communication objective: awareness, consideration, conversion, loyalty, or trust?\",\"M2\":\"What single message should feel true across everything?\",\"M3\":\"Which channels matter most?\"}},\"SOCIAL_ADDON\":{\"triggers\":[\"social\",\"instagram\",\"linkedin\",\"post\",\"reel\",\"caption\",\"calendar\",\"ugc\"],\"questions\":{\"S1\":\"Which social platform matters most right now?\",\"S2\":\"What should the audience do after seeing the content?\",\"S3\":\"What content formats are realistic for the team to produce consistently?\"}},\"REBRANDING_ADDON\":{\"triggers\":[\"rebrand\",\"refresh\",\"evolve\",\"change\",\"broken\"],\"questions\":{\"R1\":\"Why is the brand changing now?\",\"R2\":\"What must stay sacred through the change?\",\"R3\":\"What audience perception needs to shift?\"}}},\n  strategyFrameworks: {\"EQUATION_OF_TRUTH\":{\"triggers\":[\"truth\",\"intersection\",\"consumer\",\"product truth\",\"brand truth\"],\"framework\":\"Consumer Truth (drivers, fears, aspirations) + Product Truth (craft, advantages) = Brand Truth (the ownable intersection).\"},\"GOLDEN_CIRCLE\":{\"triggers\":[\"why\",\"purpose\",\"how\",\"what\"],\"framework\":\"Why -> How -> What. Start with belief, then method, then product.\"},\"ARCHETYPE_PAIRING\":{\"triggers\":[\"archetype\",\"personality\",\"character\",\"persona\"],\"framework\":\"Select Primary Archetype + Secondary Archetype, then define behaviour, voice, and proof.\"},\"BRAND_PILLARS\":{\"triggers\":[\"pillar\",\"foundation\",\"principle\",\"value prop\"],\"framework\":\"4-6 strategic pillars with rationale, proof points, and expression guidelines.\"},\"POSITIONING\":{\"triggers\":[\"positioning\",\"statement\",\"differentiation\",\"category\"],\"framework\":\"For [target], [brand] is the [category] that [differentiation] because [reasons to believe].\"},\"MANIFESTO\":{\"triggers\":[\"manifesto\",\"anthem\",\"story\",\"soul\",\"narrative\"],\"framework\":\"A belief-led narrative that captures the brand's point of view, tension, promise, and invitation.\"}},\n  communicationFrameworks: {\"CAMPAIGN_STRATEGY\":{\"triggers\":[\"campaign\",\"kpi\",\"objective\",\"awareness\",\"conversion\"],\"framework\":\"Objective and KPIs -> Audience segments -> Message hierarchy -> Channel roles -> Execution rhythm.\"},\"CONTENT_ARCHITECTURE\":{\"triggers\":[\"content\",\"calendar\",\"pillar\",\"cadence\",\"format\"],\"framework\":\"Content pillars -> Series ideas -> Cadence -> Format recommendations -> Measurement.\"},\"SIX_PILLAR_SOCIAL\":{\"triggers\":[\"social\",\"instagram\",\"post\",\"reel\",\"engagement\",\"ugc\"],\"framework\":\"6 pillars: Brand Posts, Product Posts, Engagement Posts, Moment Posts, Announcement Posts, Culture Posts.\"},\"CAMPAIGN_TERRITORIES\":{\"triggers\":[\"territory\",\"direction\",\"idea\",\"concept\",\"hashtag\"],\"framework\":\"Territory name -> Core idea -> Message hook -> Content series -> Hashtag -> Platform priority.\"},\"BRAND_COMMS_GUIDELINES\":{\"triggers\":[\"guidelines\",\"dos\",\"donts\",\"crisis\",\"pr\",\"media\",\"stakeholder\"],\"framework\":\"Messaging dos/donts -> Stakeholder templates -> PR guidance -> Crisis response principles.\"}},\n  voiceCopyReference: {\"VOICE\":{\"characteristics\":[\"Warm but sharp. Never preachy or corporate.\",\"Short punchy sentences mixed with longer flowing ones.\",\"Specific sensory detail over empty premium language.\",\"Human, conversational, and strategically grounded.\",\"Ownable vocabulary that feels true to the brand.\"]},\"METHODS\":{\"triggers\":{\"tagline\":\"AIDA\",\"headline\":\"PAS\",\"description\":\"FAB\",\"benefit\":\"Benefit Laddering\",\"email\":\"Problem -> Stakes -> Offer -> Action\",\"website\":\"Promise -> Proof -> Fit -> Action\"}},\"DELIVERABLES\":{\"triggers\":{\"tagline\":\"Taglines across tonal spectrums\",\"headline\":\"Headlines and sub-headlines\",\"manifesto\":\"Brand anthem or manifesto\",\"product\":\"Product descriptions\",\"social\":\"Social captions and hooks\",\"website\":\"Website copy\",\"email\":\"Email sequences\",\"packaging\":\"Packaging copy\"}}}\n};\n\nconst contextKinds = {\n  DISCOVERY: [\"questionnaireReference\"],\n  STRATEGY: [\"strategyFrameworks\"],\n  COMMS: [\"communicationFrameworks\"],\n  SOCIAL: [\"communicationFrameworks\", \"voiceCopyReference\"],\n  COPY: [\"voiceCopyReference\"],\n  FEEDBACK: [\"voiceCopyReference\"],\n  GENERAL: [\"questionnaireReference\", \"strategyFrameworks\", \"communicationFrameworks\", \"voiceCopyReference\"]\n}[action] || [\"questionnaireReference\", \"strategyFrameworks\", \"communicationFrameworks\", \"voiceCopyReference\"];\n\nconst selectedReferences = {};\nfor (const key of contextKinds) selectedReferences[key] = references[key];\n\nreturn [{ json: { ...d, ...selectedReferences, selectedReferenceKinds: contextKinds } }];"
+      }
+    },
+    {
+      "id": "research-router",
+      "name": "Research Router",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 1,
+      "position": [
+        2020,
+        420
+      ],
+      "parameters": {
+        "dataType": "boolean",
+        "value1": "={{ $json.needsWebResearch }}",
+        "rules": {
+          "rules": [
+            {
+              "value2": true,
+              "output": 0
+            },
+            {
+              "value2": false,
+              "output": 1
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "wait-web-research",
+      "name": "Wait: Web Research",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1,
+      "position": [
+        2260,
+        280
+      ],
+      "parameters": {
+        "resume": "timeInterval",
+        "amount": 1,
+        "unit": "seconds"
+      }
+    },
+    {
+      "id": "web-research",
+      "name": "Web Research",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        2500,
+        280
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ 'https://api.duckduckgo.com/?format=json&no_redirect=1&no_html=1&q=' + encodeURIComponent($json.research_query || $json.userInput) }}",
+        "options": {
+          "timeout": 30000
+        }
+      }
+    },
+    {
+      "id": "normalize-research",
+      "name": "Normalize Research",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2740,
+        280
+      ],
+      "parameters": {
+        "jsCode": "const result = $input.first()?.json || {};\nconst related = Array.isArray(result.RelatedTopics)\n  ? result.RelatedTopics.slice(0, 5).map((item) => ({ text: item.Text || \"\", url: item.FirstURL || \"\" })).filter((item) => item.text || item.url)\n  : [];\nreturn [{\n  json: {\n    ...$node[\"Reference Context Builder\"].json,\n    statusUpdates: [\n      ...($node[\"Reference Context Builder\"].json.statusUpdates || []),\n      \"Search complete\",\n      \"Turning notes into the answer\"\n    ],\n    research_context: {\n      query: $node[\"Reference Context Builder\"].json.research_query || \"\",\n      abstract: result.AbstractText || \"\",\n      source: result.AbstractSource || \"\",\n      url: result.AbstractURL || \"\",\n      related\n    }\n  }\n}];"
+      }
+    },
+    {
+      "id": "skip-research",
+      "name": "Skip Research",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2500,
+        560
+      ],
+      "parameters": {
+        "jsCode": "return [{\n  json: {\n    ...$input.first().json,\n    research_context: { query: \"\", abstract: \"\", source: \"\", url: \"\", related: [] }\n  }\n}];"
+      }
+    },
+    {
+      "id": "action-router",
+      "name": "Action Router",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 2,
+      "position": [
+        3000,
+        420
+      ],
+      "parameters": {
+        "mode": "rules",
+        "outputsAmount": 7,
+        "dataType": "string",
+        "value1": "={{ $json.action_type }}",
+        "rules": {
+          "rules": [
+            {
+              "value2": "DISCOVERY",
+              "output": 0
+            },
+            {
+              "value2": "STRATEGY",
+              "output": 1
+            },
+            {
+              "value2": "COMMS",
+              "output": 2
+            },
+            {
+              "value2": "SOCIAL",
+              "output": 3
+            },
+            {
+              "value2": "COPY",
+              "output": 4
+            },
+            {
+              "value2": "FEEDBACK",
+              "output": 5
+            },
+            {
+              "value2": "GENERAL",
+              "output": 6
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "discovery-prep",
+      "name": "Discovery Prep",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3240,
+        -20
+      ],
+      "parameters": {
+        "jsCode": "const d = $input.first().json || {};\nconst questionnaire = d.questionnaireReference || {};\nconst completed = d.updated_memory?.completed_questions || d.updatedMemory?.completed_questions || [];\nconst text = String(d.userInput || \"\").toLowerCase();\nlet matched = {};\nfor (const [category, data] of Object.entries(questionnaire)) {\n  if ((data.triggers || []).some((trigger) => text.includes(trigger))) {\n    for (const [qid, question] of Object.entries(data.questions || {})) {\n      if (!completed.includes(qid)) matched[qid] = question;\n    }\n  }\n}\nif (Object.keys(matched).length === 0) {\n  for (const category of [\"INTRO\", \"CORE_IDENTITY\", \"CORE_AUDIENCE\", \"CORE_PERSONALITY\"]) {\n    const questions = questionnaire[category]?.questions || {};\n    for (const [qid, question] of Object.entries(questions)) {\n      if (!completed.includes(qid)) matched[qid] = question;\n    }\n    if (Object.keys(matched).length) break;\n  }\n}\nconst selected = Object.entries(matched).slice(0, 3);\nreturn [{ json: { ...d, matchedQuestions: selected.map(([id, q]) => `${id}: ${q}`).join(\"\\n\") } }];"
+      }
+    },
+    {
+      "id": "wait-discovery-agent",
+      "name": "Wait: Discovery Agent",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1,
+      "position": [
+        3480,
+        -20
+      ],
+      "parameters": {
+        "resume": "timeInterval",
+        "amount": 5,
+        "unit": "seconds"
+      }
+    },
+    {
+      "id": "discovery-agent",
+      "name": "Discovery Agent",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        3720,
+        -20
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://openrouter.ai/api/v1/chat/completions",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "openRouterApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "HTTP-Referer",
+              "value": "https://jumpinggoose.ai"
+            },
+            {
+              "name": "X-Title",
+              "value": "JUMPINGGOOSE Text Agency"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({\n        models: [\"google/gemma-4-31b-it:free\",\"inclusionai/ling-3.0-tiny:free\",\"openai/gpt-oss-20b:free\"],\n        messages: [\n          { role: \"system\", content: \"You are the Discovery Agent for JUMPINGGOOSE Agency.\\nGuide brand discovery conversations: warm, direct, curious.\\nAsk only the matched questions provided. Max 1-3 questions.\\nIf answers are vague, probe deeper instead of moving ahead.\\nDo not ask visual-design questions.\\nReturn normal conversational text only. Do not wrap the answer in JSON or code fences.\" },\n          { role: \"user\", content: `MATCHED QUESTIONS:\\n${$json.matchedQuestions}\\n\\nCONTEXT:\\n${$json.context_injection || \"\"}\\n\\nRESEARCH:\\n${JSON.stringify($json.research_context || {})}\\n\\nUSER:\\n${$json.userInput}` }\n        ],\n        temperature: 0.45,\n        max_tokens: 4096\n      }) }}",
+        "options": {
+          "timeout": 120000
+        }
+      },
+      "credentials": {
+        "openRouterApi": {
+          "id": "7WTmdhjFDdhIURLL",
+          "name": "OpenRouter account"
+        }
+      }
+    },
+    {
+      "id": "strategy-prep",
+      "name": "Strategy Prep",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3240,
+        140
+      ],
+      "parameters": {
+        "jsCode": "const d = $input.first().json || {};\nconst frameworks = d.strategyFrameworks || {};\nconst text = String(d.userInput || \"\").toLowerCase();\nlet selectedKey = Object.keys(frameworks).find((key) => (frameworks[key].triggers || []).some((trigger) => text.includes(trigger))) || \"POSITIONING\";\nreturn [{ json: { ...d, selectedFrameworkName: selectedKey, selectedFramework: frameworks[selectedKey]?.framework || \"\" } }];"
+      }
+    },
+    {
+      "id": "wait-strategy-agent",
+      "name": "Wait: Strategy Agent",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1,
+      "position": [
+        3480,
+        140
+      ],
+      "parameters": {
+        "resume": "timeInterval",
+        "amount": 5,
+        "unit": "seconds"
+      }
+    },
+    {
+      "id": "strategy-agent",
+      "name": "Strategy Agent",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        3720,
+        140
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://openrouter.ai/api/v1/chat/completions",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "openRouterApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "HTTP-Referer",
+              "value": "https://jumpinggoose.ai"
+            },
+            {
+              "name": "X-Title",
+              "value": "JUMPINGGOOSE Text Agency"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({\n        models: [\"nvidia/nemotron-3-super-120b-a12b:free\",\"google/gemma-4-31b-it:free\",\"openai/gpt-oss-20b:free\"],\n        messages: [\n          { role: \"system\", content: \"You are the Brand Strategist for JUMPINGGOOSE Agency.\\nApply only the selected strategy framework provided.\\nUse brief facts, memory, and research context. Do not invent proof.\\nProvide structured strategic direction with rationale and next copy implications.\\nReturn clean Markdown/plain text only. Do not wrap the answer in JSON or code fences.\" },\n          { role: \"user\", content: `SELECTED FRAMEWORK: ${$json.selectedFrameworkName}\\n${$json.selectedFramework}\\n\\nCONTEXT:\\n${$json.context_injection || \"\"}\\n\\nRESEARCH:\\n${JSON.stringify($json.research_context || {})}\\n\\nUSER:\\n${$json.userInput}` }\n        ],\n        temperature: 0.4,\n        max_tokens: 4096\n      }) }}",
+        "options": {
+          "timeout": 120000
+        }
+      },
+      "credentials": {
+        "openRouterApi": {
+          "id": "7WTmdhjFDdhIURLL",
+          "name": "OpenRouter account"
+        }
+      }
+    },
+    {
+      "id": "comms-prep",
+      "name": "Communication Prep",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3240,
+        300
+      ],
+      "parameters": {
+        "jsCode": "const d = $input.first().json || {};\nconst frameworks = d.communicationFrameworks || {};\nconst text = String(d.userInput || \"\").toLowerCase();\nlet selectedKey = Object.keys(frameworks).find((key) => (frameworks[key].triggers || []).some((trigger) => text.includes(trigger))) || \"CAMPAIGN_STRATEGY\";\nreturn [{ json: { ...d, selectedFrameworkName: selectedKey, selectedFramework: frameworks[selectedKey]?.framework || \"\" } }];"
+      }
+    },
+    {
+      "id": "wait-comms-agent",
+      "name": "Wait: Communication Agent",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1,
+      "position": [
+        3480,
+        300
+      ],
+      "parameters": {
+        "resume": "timeInterval",
+        "amount": 5,
+        "unit": "seconds"
+      }
+    },
+    {
+      "id": "comms-agent",
+      "name": "Communication Agent",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        3720,
+        300
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://openrouter.ai/api/v1/chat/completions",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "openRouterApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "HTTP-Referer",
+              "value": "https://jumpinggoose.ai"
+            },
+            {
+              "name": "X-Title",
+              "value": "JUMPINGGOOSE Text Agency"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({\n        models: [\"google/gemma-4-26b-a4b-it:free\",\"openai/gpt-oss-20b:free\",\"inclusionai/ling-3.0-tiny:free\"],\n        messages: [\n          { role: \"system\", content: \"You are the Communication Architect for JUMPINGGOOSE Agency.\\nApply only the selected communication framework provided.\\nBuild text-first messaging, campaign, stakeholder, or channel communication guidance.\\nMake ideas executable with message examples and strategic rationale.\\nReturn clean Markdown/plain text only. Do not wrap the answer in JSON or code fences.\" },\n          { role: \"user\", content: `SELECTED FRAMEWORK: ${$json.selectedFrameworkName}\\n${$json.selectedFramework}\\n\\nCONTEXT:\\n${$json.context_injection || \"\"}\\n\\nRESEARCH:\\n${JSON.stringify($json.research_context || {})}\\n\\nUSER:\\n${$json.userInput}` }\n        ],\n        temperature: 0.5,\n        max_tokens: 4096\n      }) }}",
+        "options": {
+          "timeout": 120000
+        }
+      },
+      "credentials": {
+        "openRouterApi": {
+          "id": "7WTmdhjFDdhIURLL",
+          "name": "OpenRouter account"
+        }
+      }
+    },
+    {
+      "id": "social-prep",
+      "name": "Social Prep",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3240,
+        460
+      ],
+      "parameters": {
+        "jsCode": "const d = $input.first().json || {};\nconst frameworks = d.communicationFrameworks || {};\nconst selectedKey = \"SIX_PILLAR_SOCIAL\";\nreturn [{ json: { ...d, selectedFrameworkName: selectedKey, selectedFramework: frameworks[selectedKey]?.framework || \"\" } }];"
+      }
+    },
+    {
+      "id": "wait-social-agent",
+      "name": "Wait: Social Agent",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1,
+      "position": [
+        3480,
+        460
+      ],
+      "parameters": {
+        "resume": "timeInterval",
+        "amount": 5,
+        "unit": "seconds"
+      }
+    },
+    {
+      "id": "social-agent",
+      "name": "Social Agent",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        3720,
+        460
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://openrouter.ai/api/v1/chat/completions",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "openRouterApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "HTTP-Referer",
+              "value": "https://jumpinggoose.ai"
+            },
+            {
+              "name": "X-Title",
+              "value": "JUMPINGGOOSE Text Agency"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({\n        models: [\"openai/gpt-oss-20b:free\",\"google/gemma-4-26b-a4b-it:free\",\"inclusionai/ling-3.0-tiny:free\"],\n        messages: [\n          { role: \"system\", content: \"You are the Social Content Strategist for JUMPINGGOOSE Agency.\\nCreate platform-native text/content direction for social media.\\nFocus on post ideas, captions, hooks, series, calendars, community prompts, and messaging.\\nDo not create image prompts, visual directions, moodboards, palettes, or design guidance.\\nReturn clean Markdown/plain text only. Do not wrap the answer in JSON or code fences.\" },\n          { role: \"user\", content: `SELECTED FRAMEWORK: ${$json.selectedFrameworkName}\\n${$json.selectedFramework}\\n\\nCONTEXT:\\n${$json.context_injection || \"\"}\\n\\nRESEARCH:\\n${JSON.stringify($json.research_context || {})}\\n\\nUSER:\\n${$json.userInput}` }\n        ],\n        temperature: 0.55,\n        max_tokens: 4096\n      }) }}",
+        "options": {
+          "timeout": 120000
+        }
+      },
+      "credentials": {
+        "openRouterApi": {
+          "id": "7WTmdhjFDdhIURLL",
+          "name": "OpenRouter account"
+        }
+      }
+    },
+    {
+      "id": "copy-prep",
+      "name": "Copy Prep",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3240,
+        620
+      ],
+      "parameters": {
+        "jsCode": "const d = $input.first().json || {};\nconst ref = d.voiceCopyReference || {};\nconst text = String(d.userInput || \"\").toLowerCase();\nconst deliverableKey = Object.keys(ref.DELIVERABLES?.triggers || {}).find((key) => text.includes(key)) || \"copy\";\nconst methodKey = Object.keys(ref.METHODS?.triggers || {}).find((key) => text.includes(key)) || deliverableKey;\nreturn [{ json: {\n  ...d,\n  requestedDeliverable: ref.DELIVERABLES?.triggers?.[deliverableKey] || \"Brand copy or messaging output\",\n  selectedMethod: ref.METHODS?.triggers?.[methodKey] || \"Brief -> Audience -> Promise -> Proof -> Action\",\n  voiceGuidelines: (ref.VOICE?.characteristics || []).join(\"\\n\")\n} }];"
+      }
+    },
+    {
+      "id": "wait-copy-agent",
+      "name": "Wait: Copy Agent",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1,
+      "position": [
+        3480,
+        620
+      ],
+      "parameters": {
+        "resume": "timeInterval",
+        "amount": 5,
+        "unit": "seconds"
+      }
+    },
+    {
+      "id": "copy-agent",
+      "name": "Copy Agent",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        3720,
+        620
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://openrouter.ai/api/v1/chat/completions",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "openRouterApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "HTTP-Referer",
+              "value": "https://jumpinggoose.ai"
+            },
+            {
+              "name": "X-Title",
+              "value": "JUMPINGGOOSE Text Agency"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({\n        models: [\"openai/gpt-oss-20b:free\",\"google/gemma-4-26b-a4b-it:free\",\"inclusionai/ling-3.0-tiny:free\"],\n        messages: [\n          { role: \"system\", content: \"You are the Copywriter for JUMPINGGOOSE Agency.\\nFollow the selected voice guidelines, method, and requested deliverable.\\nMatch the brand's tone and user need.\\nProvide primary copy plus useful alternatives and brief strategic rationale.\\nReturn clean Markdown/plain text only. Do not wrap the answer in JSON or code fences.\" },\n          { role: \"user\", content: `REQUESTED DELIVERABLE:\\n${$json.requestedDeliverable}\\n\\nMETHOD: ${$json.selectedMethod}\\n\\nVOICE GUIDELINES:\\n${$json.voiceGuidelines}\\n\\nCONTEXT:\\n${$json.context_injection || \"\"}\\n\\nRESEARCH:\\n${JSON.stringify($json.research_context || {})}\\n\\nUSER:\\n${$json.userInput}` }\n        ],\n        temperature: 0.58,\n        max_tokens: 4096\n      }) }}",
+        "options": {
+          "timeout": 120000
+        }
+      },
+      "credentials": {
+        "openRouterApi": {
+          "id": "7WTmdhjFDdhIURLL",
+          "name": "OpenRouter account"
+        }
+      }
+    },
+    {
+      "id": "general-prep",
+      "name": "General Prep",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3240,
+        780
+      ],
+      "parameters": {
+        "jsCode": "const d = $input.first().json || {};\nreturn [{ json: { ...d, generalContext: d.context_injection || \"\" } }];"
+      }
+    },
+    {
+      "id": "wait-general-agent",
+      "name": "Wait: General Agent",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1,
+      "position": [
+        3480,
+        780
+      ],
+      "parameters": {
+        "resume": "timeInterval",
+        "amount": 5,
+        "unit": "seconds"
+      }
+    },
+    {
+      "id": "general-agent",
+      "name": "General Agent",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        3720,
+        780
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://openrouter.ai/api/v1/chat/completions",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "openRouterApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "HTTP-Referer",
+              "value": "https://jumpinggoose.ai"
+            },
+            {
+              "name": "X-Title",
+              "value": "JUMPINGGOOSE Text Agency"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({\n        models: [\"openai/gpt-oss-20b:free\",\"inclusionai/ling-3.0-tiny:free\",\"google/gemma-4-26b-a4b-it:free\"],\n        messages: [\n          { role: \"system\", content: \"You are JUMPINGGOOSE Agency.\\nAnswer general brand, copy, strategy, communication, and social-content questions in the agency voice.\\nIf the user actually needs a brief, ask 1-3 sharp questions.\\nStay text-first; do not produce visual/image-generation guidance.\\nReturn normal conversational text only. Do not wrap the answer in JSON or code fences.\" },\n          { role: \"user\", content: `CONTEXT:\\n${$json.context_injection || \"\"}\\n\\nRESEARCH:\\n${JSON.stringify($json.research_context || {})}\\n\\nUSER:\\n${$json.userInput}` }\n        ],\n        temperature: 0.5,\n        max_tokens: 4096\n      }) }}",
+        "options": {
+          "timeout": 120000
+        }
+      },
+      "credentials": {
+        "openRouterApi": {
+          "id": "7WTmdhjFDdhIURLL",
+          "name": "OpenRouter account"
+        }
+      }
+    },
+    {
+      "id": "capture-output",
+      "name": "Capture Output",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3980,
+        380
+      ],
+      "parameters": {
+        "jsCode": "const raw = $input.first()?.json || {};\nconst finalOutput = raw.choices?.[0]?.message?.content || raw.output || raw.text || raw.response || \"\";\nconst gate = $node[\"Conversation Gate\"].json || {};\nreturn [{\n  json: {\n    userInput: $node[\"Standardize Input\"].json.userInput,\n    sessionId: $node[\"Standardize Input\"].json.sessionId,\n    currentMemory: $node[\"Standardize Input\"].json.currentMemory,\n    route: gate.initial_action_type || \"\",\n    context_injection: \"\",\n    research_context: {},\n    statusUpdates: gate.statusUpdates || [\"Thinking through your request\", \"Writing the answer\"],\n    finalOutput\n  }\n}];"
+      }
+    },
+    {
+      "id": "wait-memory-write",
+      "name": "Wait: Memory Write Agent",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1,
+      "position": [
+        4220,
+        380
+      ],
+      "parameters": {
+        "resume": "timeInterval",
+        "amount": 8,
+        "unit": "seconds"
+      }
+    },
+    {
+      "id": "memory-write-agent",
+      "name": "Memory Write Agent",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        4460,
+        380
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://openrouter.ai/api/v1/chat/completions",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "openRouterApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "HTTP-Referer",
+              "value": "https://jumpinggoose.ai"
+            },
+            {
+              "name": "X-Title",
+              "value": "JUMPINGGOOSE Text Agency"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({\n        models: [\"openai/gpt-oss-20b:free\",\"inclusionai/ling-3.0-tiny:free\",\"google/gemma-4-26b-a4b-it:free\"],\n        messages: [\n          { role: \"system\", content: \"You are the Memory Curator for JUMPINGGOOSE Agency.\\nReturn only JSON: {updated_memory, session_summary, final_output}.\\nKeep durable brand facts, preferences, audience details, offer details, tone choices, decisions, and reusable direction.\\nfinal_output must preserve the user-facing answer exactly.\" },\n          { role: \"user\", content: `USER INPUT:\\n${$json.userInput}\\n\\nROUTE: ${$json.route}\\n\\nCURRENT MEMORY:\\n${JSON.stringify($json.currentMemory || {})}\\n\\nCONTEXT:\\n${$json.context_injection || \"\"}\\n\\nRESEARCH:\\n${JSON.stringify($json.research_context || {})}\\n\\nFINAL OUTPUT:\\n${$json.finalOutput}` }\n        ],\n        temperature: 0.1,\n        max_tokens: 4096\n      }) }}",
+        "options": {
+          "timeout": 120000
+        }
+      },
+      "credentials": {
+        "openRouterApi": {
+          "id": "7WTmdhjFDdhIURLL",
+          "name": "OpenRouter account"
+        }
+      }
+    },
+    {
+      "id": "final-response",
+      "name": "Final Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        4720,
+        380
+      ],
+      "parameters": {
+        "jsCode": "const raw = $input.first()?.json || {};\nconst content = raw.choices?.[0]?.message?.content || \"{}\";\nlet parsed = {};\ntry {\n  parsed = JSON.parse(content.replace(/^```json\\s*/i, \"\").replace(/```$/i, \"\").trim());\n} catch (error) {\n  parsed = {};\n}\nconst output = parsed.final_output || $node[\"Capture Output\"].json.finalOutput || \"\";\nconst clean = String(output || \"\")\n  .replace(/^```(?:json|markdown|md)?\\s*/i, \"\")\n  .replace(/```$/i, \"\")\n  .trim();\nconst statusUpdates = $node[\"Capture Output\"].json.statusUpdates || [\"Thinking through your request\", \"Writing the answer\"];\nreturn [{\n  json: {\n    message: clean,\n    text: clean,\n    output: clean,\n    response: clean,\n    progress: {\n      state: \"completed\",\n      placeholders: statusUpdates\n    },\n    statusUpdates,\n    sessionId: $node[\"Standardize Input\"].json.sessionId,\n    memory: parsed.updated_memory || {},\n    sessionSummary: parsed.session_summary || \"\"\n  }\n}];"
+      }
+    }
+  ],
+  "connections": {
+    "n8n Chat Trigger": {
+      "main": [
+        [
+          {
+            "node": "Standardize Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook Trigger": {
+      "main": [
+        [
+          {
+            "node": "Standardize Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Standardize Input": {
+      "main": [
+        [
+          {
+            "node": "Conversation Gate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Conversation Gate": {
+      "main": [
+        [
+          {
+            "node": "Early Router",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Early Router": {
+      "main": [
+        [
+          {
+            "node": "Premade Greeting",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "General Prep",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Discovery Reference Builder",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Wait: Memory Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Discovery Reference Builder": {
+      "main": [
+        [
+          {
+            "node": "Discovery Prep",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait: Memory Agent": {
+      "main": [
+        [
+          {
+            "node": "Memory Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Memory Agent": {
+      "main": [
+        [
+          {
+            "node": "Parse Memory & Route",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Memory & Route": {
+      "main": [
+        [
+          {
+            "node": "Reference Context Builder",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Reference Context Builder": {
+      "main": [
+        [
+          {
+            "node": "Research Router",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Research Router": {
+      "main": [
+        [
+          {
+            "node": "Wait: Web Research",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Skip Research",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait: Web Research": {
+      "main": [
+        [
+          {
+            "node": "Web Research",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Web Research": {
+      "main": [
+        [
+          {
+            "node": "Normalize Research",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Research": {
+      "main": [
+        [
+          {
+            "node": "Action Router",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Skip Research": {
+      "main": [
+        [
+          {
+            "node": "Action Router",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Action Router": {
+      "main": [
+        [
+          {
+            "node": "Discovery Prep",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Strategy Prep",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Communication Prep",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Social Prep",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Copy Prep",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "General Prep",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "General Prep",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Discovery Prep": {
+      "main": [
+        [
+          {
+            "node": "Wait: Discovery Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait: Discovery Agent": {
+      "main": [
+        [
+          {
+            "node": "Discovery Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Discovery Agent": {
+      "main": [
+        [
+          {
+            "node": "Capture Output",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Strategy Prep": {
+      "main": [
+        [
+          {
+            "node": "Wait: Strategy Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait: Strategy Agent": {
+      "main": [
+        [
+          {
+            "node": "Strategy Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Strategy Agent": {
+      "main": [
+        [
+          {
+            "node": "Capture Output",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Communication Prep": {
+      "main": [
+        [
+          {
+            "node": "Wait: Communication Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait: Communication Agent": {
+      "main": [
+        [
+          {
+            "node": "Communication Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Communication Agent": {
+      "main": [
+        [
+          {
+            "node": "Capture Output",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Social Prep": {
+      "main": [
+        [
+          {
+            "node": "Wait: Social Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait: Social Agent": {
+      "main": [
+        [
+          {
+            "node": "Social Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Social Agent": {
+      "main": [
+        [
+          {
+            "node": "Capture Output",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Copy Prep": {
+      "main": [
+        [
+          {
+            "node": "Wait: Copy Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait: Copy Agent": {
+      "main": [
+        [
+          {
+            "node": "Copy Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Copy Agent": {
+      "main": [
+        [
+          {
+            "node": "Capture Output",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "General Prep": {
+      "main": [
+        [
+          {
+            "node": "Wait: General Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait: General Agent": {
+      "main": [
+        [
+          {
+            "node": "General Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "General Agent": {
+      "main": [
+        [
+          {
+            "node": "Capture Output",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Capture Output": {
+      "main": [
+        [
+          {
+            "node": "Wait: Memory Write Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait: Memory Write Agent": {
+      "main": [
+        [
+          {
+            "node": "Memory Write Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Memory Write Agent": {
+      "main": [
+        [
+          {
+            "node": "Final Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  }
+}

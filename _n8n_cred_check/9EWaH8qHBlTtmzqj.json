@@ -1,0 +1,14 @@
+{
+  "updatedAt": "2026-08-09T07:25:04.844Z",
+  "createdAt": "2026-08-09T07:25:04.852Z",
+  "id": "9EWaH8qHBlTtmzqj",
+  "name": "OpenRouter account",
+  "data": "U2FsdGVkX183lbVR2IuG078k1izaq9sC1VZyKHtw1Yg/lJhiG8xlIC45J4bXmW2iI7xGzACdJjYWYz5CeImn4rTLGLTL/SW0pynZL4z9WnQwk37OW//3WwYbrthiy0OvkEdpWS5EOyx26tk/q7KKVQ==",
+  "type": "openRouterApi",
+  "isManaged": false,
+  "isGlobal": false,
+  "isResolvable": false,
+  "resolvableAllowFallback": false,
+  "resolverId": null,
+  "usageScope": "project"
+}

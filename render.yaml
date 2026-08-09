@@ -1,0 +1,31 @@
+services:
+  - type: web
+    name: jumpinggoose-n8n
+    runtime: docker
+    dockerfilePath: ./render/Dockerfile
+    plan: free
+    envVars:
+      - key: N8N_HOST
+        value: jumpinggoose-n8n.onrender.com
+      - key: N8N_PORT
+        value: 5678
+      - key: N8N_LISTEN_ADDRESS
+        value: 0.0.0.0
+      - key: N8N_PROTOCOL
+        value: https
+      - key: WEBHOOK_URL
+        value: https://jumpinggoose-n8n.onrender.com/
+      - key: N8N_EDITOR_BASE_URL
+        value: https://jumpinggoose-n8n.onrender.com/
+      - key: N8N_SECURE_COOKIE
+        value: true
+      - key: GENERIC_TIMEZONE
+        value: Asia/Kolkata
+      - key: TZ
+        value: Asia/Kolkata
+      - key: DB_TYPE
+        value: sqlite
+      - key: N8N_BLOCK_ENV_ACCESS_IN_NODE
+        value: false
+      - key: N8N_ENCRYPTION_KEY
+        generateValue: true
